@@ -12,4 +12,4 @@ PORT=$2
 NUMBER=$3
 
 # 执行 tcpamp 命令
-timeout "$((NUMBER - 1))" ./syn "$IP" "$PORT" cnip.txt 18 "$NUMBER"
+timeout "$((NUMBER - 1))" ./syn "$IP" "$PORT" synip.txt 18 "$NUMBER"
