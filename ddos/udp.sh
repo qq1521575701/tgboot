@@ -12,4 +12,4 @@ PORT=$2
 NUMBER=$3
 
 # 执行 meme 命令
-timeout "$((NUMBER - 1))" ./udp "$IP" "$PORT" meme.txt 1 150000 "$NUMBER"
+timeout "$((NUMBER - 1))" ./udp "$IP" "$PORT" udpip.txt 1 150000 "$NUMBER"
