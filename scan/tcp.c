@@ -48,8 +48,8 @@ int create_socket(char *src_ip, int src_port, char *dst_ip) {
     iph.ihl = 5; // IP 头部长度
     iph.version = 4; // IPv4
     iph.tos = 0; // 服务类型
-    iph.tot_len = sizeof(iph) + sizeof(tcph) + strlen("GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n");
-    iph.id = htons(54321); // 标识符
+    iph.tot_len = sizeof(iph) + sizeof(tcph) + strlen("GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n");
+    iph.id = htons(12345); // 标识符
     iph.frag_off = 0; // 分段偏移
     iph.ttl = 255; // 生存时间
     iph.protocol = IPPROTO_TCP; // 协议类型
@@ -65,9 +65,15 @@ int create_socket(char *src_ip, int src_port, char *dst_ip) {
     tcph.source = htons(src_port); // 源端口
     tcph.dest = htons(80); // 目的端口
     tcph.seq = htonl(rand() % (UINT32_MAX - 100000) + 100000); // 随机序列号
-    tcph.ack_seq = 0; // 确认序列号
+    tcph.ack_seq = htonl(5000); // 确认序列号
     tcph.doff = 5; // TCP 头部长度
-    tcph.syn = 1; // SYN 标志
+    tcph.fin = 0; // FIN 标志
+    tcph.syn = 0; // SYN 标志（初始化连接时设置）
+    tcph.rst = 0; // RST 标志
+    tcph.psh = 1; // PSH 标志
+    tcph.ack = 1; // ACK 标志（确认号有效）
+    tcph.urg = 1; // URG 标志（紧急指针有效）
+    tcph.urg_ptr = htons(10); // 紧急指针，假设指向第10个字节
     tcph.window = htons(65535); // 窗口大小
     tcph.check = 0; // 校验和（初始为0）
 
@@ -85,14 +91,14 @@ int create_socket(char *src_ip, int src_port, char *dst_ip) {
     psh.dest_address = inet_addr(dst_ip);
     psh.placeholder = 0;
     psh.protocol = IPPROTO_TCP;
-    psh.tcp_length = htons(sizeof(tcph) + strlen("GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
+    psh.tcp_length = htons(sizeof(tcph) + strlen("GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
 
     // 计算 TCP 校验和
-    int psize = sizeof(psh) + sizeof(tcph) + strlen("GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n");
+    int psize = sizeof(psh) + sizeof(tcph) + strlen("GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n");
     char *pseudogram = malloc(psize);
     memcpy(pseudogram, (char *)&psh, sizeof(psh));
     memcpy(pseudogram + sizeof(psh), &tcph, sizeof(tcph));
-    memcpy(pseudogram + sizeof(psh) + sizeof(tcph), "GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n", strlen("GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
+    memcpy(pseudogram + sizeof(psh) + sizeof(tcph), "GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n", strlen("GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
     
     // 计算校验和并赋值给 TCP 头部
     tcph.check = checksum((unsigned short *)pseudogram, psize);
@@ -102,7 +108,7 @@ int create_socket(char *src_ip, int src_port, char *dst_ip) {
     memset(packet, 0, 4096);
     memcpy(packet, &iph, sizeof(iph));
     memcpy(packet + sizeof(iph), &tcph, sizeof(tcph));
-    memcpy(packet + sizeof(iph) + sizeof(tcph), "GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n", strlen("GET / HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
+    memcpy(packet + sizeof(iph) + sizeof(tcph), "GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n", strlen("GET /index.php?id=1 and 1=1 HTTP/1.1\r\nHost: freedomhouse.org\r\n\r\n"));
 
     // 设置目标地址
     dest.sin_family = AF_INET;
