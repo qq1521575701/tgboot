@@ -114,7 +114,13 @@ int create_socket(char *src_ip, int src_port, char *dst_ip) {
     dest.sin_addr.s_addr = iph.daddr;
 
     // 发送数据包
-    sendto(sockfd, packet, iph.tot_len, 0, (struct sockaddr *)&dest, sizeof(dest));
+    if (sendto(sockfd, packet, iph.tot_len, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
+        printf("发送失败 %s\n",dst_ip);
+    } else {
+        printf("发送成功 %s\n",dst_ip);
+    }
+
+    
     close(sockfd); // 关闭套接字
     return 0; // 成功返回
 }
