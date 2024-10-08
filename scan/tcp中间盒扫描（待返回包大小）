@@ -14,8 +14,6 @@
 
 #define BUFFER_SIZE 1024 // 定义缓冲区大小
 
-
-
 // 获取可用的源端口
 int get_free_port()
 {
@@ -50,7 +48,7 @@ int get_free_port()
     return port;// 返回获取到的可用端口
     
 }
-// 获取可用的源端口
+
 
 
 
@@ -83,7 +81,7 @@ void *listen_function(void *arg)
     int total_size = 0;
     // 设置接收超时为 5 秒
     struct timeval timeout;
-    timeout.tv_sec = 5;
+    timeout.tv_sec = 3;
     // 秒
     timeout.tv_usec = 0;
     // 微秒
@@ -108,24 +106,12 @@ void *listen_function(void *arg)
                 total_size += bytes_received;
                 packet_count++;
             }
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
         }
     }
     printf("dst_ip: %s，src_port: %d，数据包 %d 个，总大小为 %d 字节\n", args->line, args->port, packet_count, total_size);
     close(listen_sock);
     return NULL;
 }
-// 监听线程函数
 
 
 
@@ -255,7 +241,7 @@ void *send_function(void *arg)
 {
     thread_args_t *args = (thread_args_t *)arg;
     // printf("发送线程启动，发送行: %s，端口: %d\n", args->line, args->port);
-    create_socket("192.168.1.27", args->port, args->line);
+    create_socket("127.0.0.1", args->port, args->line);
     return NULL;
 }
 // 线程函数
@@ -275,7 +261,6 @@ void *thread_function(void *arg)
         free(args);
         return NULL;
     }
-    sleep(1);
     // 创建发送线程
     pthread_t send_thread;
     if (pthread_create(&send_thread, NULL, send_function, (void *)args) != 0)
@@ -328,7 +313,7 @@ int main(int argc, char *argv[])
     while (fgets(line, sizeof(line), file))
     {
         // 去除行末的换行符
-        line[strcspn(line, "\n")] = '\0';
+         line[strcspn(line, "\r\n") ] = '\0';
         // 创建新线程
         if (pthread_create(&threads[thread_index], NULL, thread_function, (void *)strdup(line)) != 0)
         {
