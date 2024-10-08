@@ -1,23 +1,27 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <arpa/inet.h>
-#include <unistd.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
-#include <stdint.h>
+#include <unistd.h>
+#include <errno.h>
 #include <time.h>
 #include <errno.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
+
+#define BUFFER_SIZE 1024 // 定义缓冲区大小
 
 // 获取可用的源端口
-int get_free_port()
-{
+int get_free_port() {
     int sockfd;
     struct sockaddr_in addr;
 
+    // 创建UDP套接字
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0)
-    {
+    if (sockfd < 0) {
         perror("创建套接字失败");
         return -1;
     }
@@ -25,18 +29,17 @@ int get_free_port()
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(0); // 绑定到端口0以获取一个可用端口
+    addr.sin_port = htons(0);
 
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-    {
+    // 绑定到端口0以获取一个可用端口
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("绑定失败");
         close(sockfd);
         return -1;
     }
 
     socklen_t addr_len = sizeof(addr);
-    if (getsockname(sockfd, (struct sockaddr *)&addr, &addr_len) < 0)
-    {
+    if (getsockname(sockfd, (struct sockaddr *)&addr, &addr_len) < 0) {
         perror("获取端口失败");
         close(sockfd);
         return -1;
@@ -47,20 +50,73 @@ int get_free_port()
     return port; // 返回获取到的可用端口
 }
 
+// 定义一个结构体来传递多个参数
+typedef struct {
+    char *line;
+    int port;
+} thread_args_t;
+
+// 监听线程函数
+void *listen_function(void *arg) {
+    thread_args_t *args = (thread_args_t *)arg;
+    int port = args->port;
+
+    // 创建原始套接字
+    int listen_sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (listen_sock < 0) {
+        perror("创建原始套接字失败");
+        return NULL;
+    }
+
+    char buffer[BUFFER_SIZE];
+    int packet_count = 0;
+    int total_size = 0;
+
+    // 设置接收超时为 5 秒
+    struct timeval timeout;
+    timeout.tv_sec = 10; // 秒
+    timeout.tv_usec = 0; // 微秒
+    setsockopt(listen_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+
+    while (1) {
+        ssize_t bytes_received = recv(listen_sock, buffer, sizeof(buffer), 0);
+        if (bytes_received < 0) {
+            break; // 退出循环
+        }
+
+        // 将接收到的数据转换为 IP 头部
+        struct iphdr *ip_header = (struct iphdr *)buffer;
+
+        // 来源端口和目标端口
+        if (ip_header->protocol == IPPROTO_TCP) {
+            // TCP 头部开始的位置
+            struct tcphdr *tcp_header = (struct tcphdr *)(buffer + (ip_header->ihl * 4));
+
+            // 检查目标端口
+            if (ntohs(tcp_header->dest) == port) {
+                total_size += bytes_received;
+                packet_count++;
+            }
+        }
+    }
+
+    // 输出结果
+    printf("dst_ip: %s，src_port: %d，数据包 %d 个，总大小为 %d 字节\n", args->line, args->port, packet_count, total_size);
+    close(listen_sock);
+    return NULL;
+}
+
 // 校验和计算函数
-unsigned short checksum(unsigned short *b, int len)
-{
+unsigned short checksum(unsigned short *b, int len) {
     unsigned short *p = b;
     unsigned int sum = 0;
     unsigned short answer = 0;
 
     // 计算校验和
-    for (sum = 0; len > 1; len -= 2)
-    {
+    for (sum = 0; len > 1; len -= 2) {
         sum += *p++;
     }
-    if (len == 1)
-    {
+    if (len == 1) {
         sum += *(unsigned char *)p;
     }
     sum = (sum >> 16) + (sum & 0xFFFF);
@@ -70,10 +126,9 @@ unsigned short checksum(unsigned short *b, int len)
 }
 
 // 创建原始套接字并发送数据包
-int create_socket(char *src_ip, int src_port, char *dst_ip)
-{
+int create_socket(char *src_ip, int src_port, char *dst_ip) {
     int sockfd;
-    struct sockaddr_in dest, recv_addr;
+    struct sockaddr_in dest;
     struct iphdr iph;
     struct tcphdr tcph;
     char packet[4096];
@@ -81,8 +136,7 @@ int create_socket(char *src_ip, int src_port, char *dst_ip)
 
     // 创建套接字
     sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-    if (sockfd < 0)
-    {
+    if (sockfd < 0) {
         printf("套接字创建失败 %s\n", dst_ip);
         return -1; // 失败返回
     }
@@ -122,8 +176,7 @@ int create_socket(char *src_ip, int src_port, char *dst_ip)
     tcph.check = 0;
 
     // 填充伪头部
-    struct pseudo_header
-    {
+    struct pseudo_header {
         u_int32_t source_address;
         u_int32_t dest_address;
         u_int8_t placeholder;
@@ -147,7 +200,7 @@ int create_socket(char *src_ip, int src_port, char *dst_ip)
 
     // 计算校验和并赋值给 TCP 头部
     tcph.check = checksum((unsigned short *)pseudogram, psize);
-    free(pseudogram); // 释放内存
+    free(pseudogram);
 
     // 创建数据包
     memset(packet, 0, 4096);
@@ -160,122 +213,77 @@ int create_socket(char *src_ip, int src_port, char *dst_ip)
     dest.sin_port = htons(80);
     dest.sin_addr.s_addr = iph.daddr;
 
-    // 监听数据包
-    int recv_sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-    if (recv_sock < 0)
-    {
-        perror("监听套接字创建失败");
-        close(sockfd);
-        return -1;
-    }
-
     // 发送数据包
-    if (sendto(sockfd, packet, iph.tot_len, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0)
-    {
+    if (sendto(sockfd, packet, iph.tot_len, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
         // printf("发送失败 %s\n", dst_ip);
-    }
-    else
-    {
+    } else {
         // printf("发送成功 %s\n", dst_ip);
     }
-    close(sockfd);    // 关闭发送套接字
-    // 设置接收超时
-    struct timeval timeout;
-    timeout.tv_sec = 5; // 5秒超时
-    timeout.tv_usec = 0;
-    setsockopt(recv_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
 
-    // 循环接收数据，直到超时
-    int packet_count = 0;
-    int total_size = 0;
-    socklen_t addr_len = sizeof(recv_addr);
-
-    time_t start_time = time(NULL);
-    while (difftime(time(NULL), start_time) < 3)
-    {
-        ssize_t bytes_received = recvfrom(recv_sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&recv_addr, &addr_len);
-        if (bytes_received < 0)
-        {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                break; // 超时，没有数据包到达
-            }
-            perror("接收失败");
-            break;
-        }
-        packet_count++;
-        total_size += bytes_received;
-    }
-
-
-
-    printf("dst_ip: %s，src_port: %d，数据包 %d 个，总大小为 %d 字节\n",
-       inet_ntoa(recv_addr.sin_addr), src_port, packet_count, total_size);
-       fflush(stdout);
-    close(recv_sock); // 关闭接收套接字
-    return 0;         // 成功返回
+    close(sockfd); // 关闭发送套接字
 }
 
+// 发送线程函数
+void *send_function(void *arg) {
+    thread_args_t *args = (thread_args_t *)arg;
+    // printf("发送线程启动，发送行: %s，端口: %d\n", args->line, args->port);
+    create_socket("127.0.0.1", args->port, args->line); // 示例源IP地址，请替换为实际值
+    return NULL;
+}
 
-//主函数
-int main(int argc, char *argv[])
-{
-    // 检查参数数量
-    if (argc != 5)
-    {
-        fprintf(stderr, "Usage: %s <目标ip> <目标port> <反射文件> <延迟毫秒>\n", argv[0]);
-        printf("说明:\n");
-        printf("  目标IP: 发送数据包的目标地址（使用源IP发送）\n");
-        printf("  目标端口: 目标IP的端口号，用于接收数据\n");
-        printf("  反射文件: 存储反射数据的文件路径\n");
-        printf("  延迟毫秒: 在发送数据包之间的延迟时间（单位：毫秒），-1表示没有延迟。\n");
-        return 1; // 返回1表示错误
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        fprintf(stderr, "用法: %s <文件名>\n", argv[0]);
+        return EXIT_FAILURE;
     }
 
-    // 获取参数
-    char *src_ip = argv[1];      // 源IP地址
-    char *target_file = argv[3]; // 目标文件
-    int delay = atoi(argv[4]);   // 延迟
-
-    // 打开目标文件
-    FILE *file = fopen(target_file, "r");
-    if (!file)
-    {
-        printf("文件打开失败: %s\n", target_file);
-        return 1;
+    FILE *file = fopen(argv[1], "r");
+    if (!file) {
+        perror("打开文件失败");
+        return EXIT_FAILURE;
     }
 
-    char line[256];      // 用于存储读取的行
-    int total_count = 0; // 总行数
+    char line[BUFFER_SIZE];
+    pthread_t threads[BUFFER_SIZE]; // 线程数组
+    int thread_count = 0;
 
-    // 先计算总行数
-    while (fgets(line, sizeof(line), file))
-    {
-        total_count++;
-    }
+    // 读取文件中的每一行
+    while (fgets(line, sizeof(line), file)) {
+        // 去掉行末的换行符
+        line[strcspn(line, "\n")] = 0;
+        int free_port = get_free_port();
+        if (free_port < 0) {
+            fprintf(stderr, "获取可用端口失败\n");
+            continue;
+        }
 
-    // 重置文件指针到开头
-    rewind(file);
+        // 创建线程
+        thread_args_t *args = malloc(sizeof(thread_args_t));
+        args->line = strdup(line); // 复制行内容
+        args->port = free_port;
 
-    int current_count = 0; // 当前行数
-
-    while (fgets(line, sizeof(line), file))
-    {
-        // 去除行末的换行符
-        line[strcspn(line, "\r\n")] = 0;
-        current_count++;
-
-        // printf("[%d/%d]", current_count, total_count); //输出当前行数
-        int src_port = get_free_port();        // 源端口
-        create_socket(src_ip, src_port, line); // 发送函数
-
-        // 添加延迟，只有在 delay 不为 -1 时才调用 usleep
-        if (delay != -1)
-        {
-            usleep(delay * 1000); // 将延迟转换为微秒
+        if (pthread_create(&threads[thread_count++], NULL, send_function, args) != 0) {
+            perror("创建线程失败");
+            free(args->line);
+            free(args);
+            continue;
+        }
+        
+        // 监听线程
+        pthread_t listen_thread;
+        if (pthread_create(&listen_thread, NULL, listen_function, args) != 0) {
+            perror("创建监听线程失败");
+            free(args->line);
+            free(args);
+            continue;
         }
     }
 
-    fclose(file); // 关闭文件
-    return 0;     // 返回0表示成功
+    // 等待所有线程结束
+    for (int i = 0; i < thread_count; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    fclose(file);
+    return EXIT_SUCCESS;
 }
