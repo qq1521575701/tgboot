@@ -211,7 +211,7 @@ int create_socket(char *src_ip, int src_port, char *dst_ip)
 
     printf("dst_ip: %s，src_port: %d，数据包 %d 个，总大小为 %d 字节\n",
        inet_ntoa(recv_addr.sin_addr), src_port, packet_count, total_size);
-
+       fflush(stdout);
     close(recv_sock); // 关闭接收套接字
     return 0;         // 成功返回
 }
