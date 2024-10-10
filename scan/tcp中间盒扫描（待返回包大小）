@@ -1,18 +1,105 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include <sys/socket.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
-#include <unistd.h>
-#include <errno.h>
-#include <time.h>
-#include <errno.h>
-#include <netinet/tcp.h>
 #include <netinet/udp.h>
+#include <time.h>
+#include <pthread.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
 
-#define BUFFER_SIZE 1024 // 定义缓冲区大小
+#define BUFFER_SIZE 65536
+int line_count = 0; // 记录行数
+struct thread_data {
+    char time_str[20];
+    char dst_ip[16];
+    int src_port;
+};
+
+
+// 声明全局线程变量
+pthread_t writer_thread, reader_thread;
+
+FILE *output_file;
+pthread_mutex_t file_mutex; // 声明全局互斥锁
+int listen_sock;
+
+// 手动解析时间字符串
+time_t parse_time(const char* time_str) {
+    struct tm tm_time = {0};
+    sscanf(time_str, "%d-%d-%d %d:%d:%d", 
+           &tm_time.tm_year, &tm_time.tm_mon, &tm_time.tm_mday, 
+           &tm_time.tm_hour, &tm_time.tm_min, &tm_time.tm_sec);
+    
+    // 调整年份和月份
+    tm_time.tm_year -= 1900; // 年份从1900开始
+    tm_time.tm_mon -= 1;     // 月份从0开始
+    
+    return mktime(&tm_time);
+}
+
+void* read_function(void* arg) {
+    struct thread_data *data = (struct thread_data *)arg;
+
+    // 睡眠 5 秒
+    sleep(5);
+
+    pthread_mutex_lock(&file_mutex);
+
+    FILE *file_to_modify = fopen("output.txt", "r");
+    if (file_to_modify) {
+        char line[256];
+        int count = 0;
+        char port_str[10]; // 用于存储端口的字符串表示
+
+        snprintf(port_str, sizeof(port_str), "%d", data->src_port); // 转换端口为字符串
+        
+        time_t current_time = time(NULL); // 获取当前时间
+
+        while (fgets(line, sizeof(line), file_to_modify) != NULL) {
+            char time_str[20];
+            struct tm tm_time;
+
+            char *start = strchr(line, '[');
+            char *end = strchr(line, ']');
+            
+            // 如果找到时间，并且有效
+            if (start && end && end > start) {
+                size_t len = end - start - 1; // 计算时间字符串的长度
+                strncpy(time_str, start + 1, len);
+                time_str[len] = '\0'; // 添加字符串结束符
+                
+                // 将提取的时间字符串转换为时间戳
+                time_t line_time = parse_time(time_str);
+                // 比较行中是否包含目标字符串
+                if (strstr(line, port_str) != NULL && difftime(current_time, line_time) > -6000) {
+                //printf("current_time: %ld\n", (long)current_time);
+                //printf("line_time: %ld\n", (long)line_time);
+                
+                    count++;
+                }
+            }
+        }
+
+        printf("ip: %s 源端口: %s 返回包个数: %d\n", data->dst_ip, port_str, count);
+        
+        fclose(file_to_modify);
+    } else {
+        perror("打开文件以读取失败");
+    }
+    
+    pthread_mutex_unlock(&file_mutex);
+    free(data); // 释放分配的内存
+    return NULL; // 线程结束
+}
+
+
+
 
 // 获取可用的源端口
 int get_free_port()
@@ -48,72 +135,6 @@ int get_free_port()
     return port;// 返回获取到的可用端口
     
 }
-
-
-
-
-// 定义一个结构体来传递多个参数
-typedef struct
-{
-    char *line;
-    int port;
-} thread_args_t;
-// 定义一个结构体来传递多个参数
-
-
-
-
-
-// 监听线程函数
-void *listen_function(void *arg)
-{
-    thread_args_t *args = (thread_args_t *)arg;
-    int port = args->port;
-    // 创建原始套接字
-    int listen_sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
-    if (listen_sock < 0)
-    {
-        perror("创建原始套接字失败");
-        return NULL;
-    }
-    char buffer[BUFFER_SIZE];
-    int packet_count = 0;
-    int total_size = 0;
-    // 设置接收超时为 5 秒
-    struct timeval timeout;
-    timeout.tv_sec = 3;
-    // 秒
-    timeout.tv_usec = 0;
-    // 微秒
-    setsockopt(listen_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-    while (1)
-    {
-        ssize_t bytes_received = recv(listen_sock, buffer, sizeof(buffer), 0);
-        if (bytes_received < 0)
-        {
-            break;
-        }
-        // 将接收到的数据转换为 IP 头部
-        struct iphdr *ip_header = (struct iphdr *)buffer;
-        // 来源端口和目标端口
-        if (ip_header->protocol == IPPROTO_TCP)
-        {
-            // TCP 头部开始的位置
-            struct tcphdr *tcp_header = (struct tcphdr *)(buffer + (ip_header->ihl * 4));
-            // 检查目标端口
-            if (ntohs(tcp_header->dest) == port)
-            {
-                total_size += bytes_received;
-                packet_count++;
-            }
-        }
-    }
-    printf("dst_ip: %s，src_port: %d，数据包 %d 个，总大小为 %d 字节\n", args->line, args->port, packet_count, total_size);
-    close(listen_sock);
-    return NULL;
-}
-
-
 
 
 // 校验和计算函数
@@ -227,119 +248,162 @@ int create_socket(char *src_ip, int src_port, char *dst_ip)
     // 发送数据包
     if (sendto(sockfd, packet, iph.tot_len, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0)
     {
-        // printf("发送失败 %s\n", dst_ip);
+        //printf("发送失败 %s\n", dst_ip);
     }
     else
     {
-        // printf("发送成功 %s\n", dst_ip);
+        time_t current_time = time(NULL);
+        struct tm *local_time = localtime(&current_time);
+        char time_str[20];
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time);
+//printf("[%s] Source IP: %s, Destination Port: %d\n", time_str, dst_ip, src_port);
+
+struct thread_data *data = malloc(sizeof(struct thread_data));
+if (!data) {
+    perror("无法分配内存");
+    exit(EXIT_FAILURE);
+}
+
+strncpy(data->time_str, time_str, sizeof(data->time_str));
+strncpy(data->dst_ip, dst_ip, sizeof(data->dst_ip));
+data->src_port = src_port;
+
+// 创建读取线程
+int result = pthread_create(&reader_thread, NULL, read_function, (void*)data);
+if (result) {
+    fprintf(stderr, "创建线程失败: %d\n", result);
+    free(data); // 释放已分配的内存
+    exit(EXIT_FAILURE);
+}
+
+
+    
+
+        
+        
     }
     close(sockfd);
     // 关闭发送套接字
 }
-// 发送线程函数
-void *send_function(void *arg)
-{
-    thread_args_t *args = (thread_args_t *)arg;
-    // printf("发送线程启动，发送行: %s，端口: %d\n", args->line, args->port);
-    create_socket("127.0.0.1", args->port, args->line);
+
+void* packet_receiver(void* arg) {
+    struct sockaddr_in addr;
+    char buffer[BUFFER_SIZE];
+    int addr_len = sizeof(addr);
+
+    while (1) {
+        ssize_t data_size = recvfrom(listen_sock, buffer, sizeof(buffer), 0, (struct sockaddr*)&addr, (socklen_t*)&addr_len);
+        if (data_size < 0) {
+            perror("Recvfrom failed");
+            continue;
+        }
+
+        struct iphdr *ip_header = (struct iphdr *)buffer;
+        struct tcphdr *tcp_header = (struct tcphdr *)(buffer + ip_header->ihl * 4);
+        struct in_addr src_ip;
+        src_ip.s_addr = ip_header->saddr;
+
+        // 获取当前时间
+        time_t current_time = time(NULL);
+        char time_str[20];
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&current_time));
+
+        // 锁定文件
+        pthread_mutex_lock(&file_mutex);
+        fprintf(output_file,"[%s] Source IP: %s, Destination Port: %u, Size: %zd bytes\n", 
+               time_str, inet_ntoa(src_ip), ntohs(tcp_header->dest), data_size);
+        fflush(output_file);
+        
+        
+        line_count++; // 每次写入后增加行数
+        if (line_count > 20000) { // 如果行数超过20000
+            freopen("output.txt", "w", output_file); // 清空文件
+            line_count = 0; // 重置行数计数器
+        }
+
+        pthread_mutex_unlock(&file_mutex);
+        
+        
+        
+    }
     return NULL;
 }
-// 线程函数
-void *thread_function(void *arg)
-{
-    char *line = (char *)arg;
-    int port = get_free_port();
-    thread_args_t *args = malloc(sizeof(thread_args_t));
-    args->line = strdup(line);
-    args->port = port;
-    // 创建监听线程
-    pthread_t listen_thread;
-    if (pthread_create(&listen_thread, NULL, listen_function, (void *)args) != 0)
-    {
-        perror("创建监听线程失败");
-        free(args->line);
-        free(args);
-        return NULL;
-    }
-    // 创建发送线程
-    pthread_t send_thread;
-    if (pthread_create(&send_thread, NULL, send_function, (void *)args) != 0)
-    {
-        perror("创建发送线程失败");
-        free(args->line);
-        free(args);
-        return NULL;
-    }
-    // 等待监听和发送线程结束
-    pthread_join(listen_thread, NULL);
-    // pthread_join(send_thread, NULL);
-    return NULL;
-}
-// 主函数
-int main(int argc, char *argv[])
-{
-    // 检查参数数量
-    if (argc != 3)
-    {
-        fprintf(stderr, "用法: %s <反射文件> <线程数量>\n", argv[0]);
-        return 1;
-        // 返回1表示错误
-    }
-    // 获取参数
-    char *target_file = argv[1];
-    // 反射文件
-    int THREAD_COUNT = atoi(argv[2]);
-    // 从命令行参数中获取线程数量
-    // 检查线程数量是否合法
-    if (THREAD_COUNT <= 0)
-    {
-        fprintf(stderr, "错误: 线程数量必须是正整数。\n");
-        return 1;
-        // 返回1表示错误
-    }
-    // 打开目标文件
-    FILE *file = fopen(target_file, "r");
-    if (!file)
-    {
+
+
+
+
+
+
+int main(int argc, char *argv[]) {  
+    // 检查命令行参数数量  
+    if (argc != 4) {  
+        fprintf(stderr, "用法: %s <反射文件> <延迟> <源ip>\n", argv[0]);  
+        return 1;  
+    }  
+
+    // 打开输出文件，确保是新文件
+    output_file = fopen("output.txt", "w");
+    if (output_file == NULL) {
         perror("文件打开失败");
+        return 1; // 直接返回
+    }
+
+    // 初始化文件锁
+    pthread_mutex_init(&file_mutex, NULL);
+
+    // 创建原始套接字
+    listen_sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (listen_sock < 0) {
+        perror("Socket creation failed");
+        fclose(output_file);
         return 1;
     }
-    char line[256];
-    // 用于存储读取的行
-    pthread_t threads[THREAD_COUNT];
-    // 存储线程ID
-    int thread_index = 0;
-    // 读取文件并启动线程
-    while (fgets(line, sizeof(line), file))
-    {
-        // 去除行末的换行符
-         line[strcspn(line, "\r\n") ] = '\0';
-        // 创建新线程
-        if (pthread_create(&threads[thread_index], NULL, thread_function, (void *)strdup(line)) != 0)
-        {
-            perror("线程创建失败");
-            return 1;
-        }
-        // 处理线程数量限制
-        thread_index++;
-        if (thread_index >= THREAD_COUNT)
-        {
-            for (int i = 0; i < THREAD_COUNT; i++)
-            {
-                pthread_join(threads[i], NULL);
-                // 等待线程结束
-            }
-            thread_index = 0;
-            // 重置线程索引
-        }
+
+    pthread_t receiver_thread;
+    // 创建接收数据包的线程
+    if (pthread_create(&receiver_thread, NULL, packet_receiver, NULL) != 0) {
+        perror("Thread creation failed");
+        close(listen_sock);
+        fclose(output_file);
+        return 1;
     }
-    // 等待所有剩余线程结束
-    for (int i = 0; i < thread_index; i++)
-    {
-        pthread_join(threads[i], NULL);
-    }
-    // 关闭文件
-    fclose(file);
+
+    // 声明并初始化变量  
+    char *target_file = argv[1]; // 文件路径  
+    int delay = atoi(argv[2]); // 延迟  
+    char *src_ip = argv[3]; // 源IP地址  
+
+    char line_buffer[256]; // 用于存储文件行的缓冲区  
+
+    // 打开目标文件  
+    FILE *file = fopen(target_file, "r");  
+    if (!file) {  
+        perror("文件打开失败");  
+        fclose(output_file); // 关闭输出文件
+        return 1;  
+    }  
+    
+    int i;
+
+    // 处理文件内容  
+    while (fgets(line_buffer, sizeof(line_buffer), file) != NULL) {  
+        line_buffer[strcspn(line_buffer, "\r\n")] = '\0'; // 去除行末的换行符  
+        int src_port = get_free_port();
+        create_socket(src_ip, src_port, line_buffer);
+        usleep(delay * 1000);
+    }  
+    
+
+    
+
+
+    fclose(file); // 关闭文件  
+    sleep(30);
+    fclose(output_file); // 关闭输出文件
+    pthread_cancel(receiver_thread); // 取消接收线程
+    
+    close(listen_sock);
     return 0;
-    // 成功返回
 }
+
+
